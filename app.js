@@ -3,27 +3,48 @@
 // Global state
 let ipsaChart = null;
 let currentPeriod = 7;
+let currentSymbol = '^IPSA';
 let historicalData = [];
-let lastIpsaValue = null;
+let lastValue = null;
+let usdRate = null;
+let ufRate = null;
+
+// Chilean stocks configuration
+const STOCKS = {
+    '^IPSA': { name: 'IPSA', description: 'Índice IPSA', type: 'index' },
+    'SQM-B.SN': { name: 'SQM-B', description: 'SQM', type: 'stock' },
+    'FALABELLA.SN': { name: 'FALABELLA', description: 'Falabella', type: 'stock' },
+    'COPEC.SN': { name: 'COPEC', description: 'Empresas Copec', type: 'stock' },
+    'BSANTANDER.SN': { name: 'BSANTANDER', description: 'Banco Santander Chile', type: 'stock' },
+    'CENCOSUD.SN': { name: 'CENCOSUD', description: 'Cencosud', type: 'stock' },
+    'CHILE.SN': { name: 'CHILE', description: 'Banco de Chile', type: 'stock' },
+    'ENELCHILE.SN': { name: 'ENELCHILE', description: 'Enel Chile', type: 'stock' },
+    'CCU.SN': { name: 'CCU', description: 'CCU', type: 'stock' },
+    'CMPC.SN': { name: 'CMPC', description: 'CMPC', type: 'stock' },
+    'LTM.SN': { name: 'LTM', description: 'LATAM Airlines', type: 'stock' }
+};
 
 // API endpoints
 const CMF_API_KEY = '10affc3841d7013d0374f12e609a31dd7ffe4090';
 const CMF_UF_API = `https://api.cmfchile.cl/api-sbifv3/recursos_api/uf?apikey=${CMF_API_KEY}&formato=json`;
 const CMF_DOLAR_API = `https://api.cmfchile.cl/api-sbifv3/recursos_api/dolar?apikey=${CMF_API_KEY}&formato=json`;
-const YAHOO_FINANCE_PROXY = 'https://corsproxy.io/?';
-const IPSA_SYMBOL = '^IPSA';
+const CORS_PROXY = 'https://corsproxy.io/?';
 
 // DOM Elements
 const elements = {
-    ipsaValue: document.getElementById('ipsaValue'),
-    ipsaChange: document.getElementById('ipsaChange'),
+    stockSelector: document.getElementById('stockSelector'),
+    stockName: document.getElementById('stockName'),
+    stockDescription: document.getElementById('stockDescription'),
+    mainValue: document.getElementById('mainValue'),
+    valueChange: document.getElementById('valueChange'),
     clpValue: document.getElementById('clpValue'),
     usdValue: document.getElementById('usdValue'),
     usdRate: document.getElementById('usdRate'),
     ufValue: document.getElementById('ufValue'),
     ufRate: document.getElementById('ufRate'),
     lastUpdate: document.getElementById('lastUpdate'),
-    refreshBtn: document.getElementById('refreshBtn')
+    refreshBtn: document.getElementById('refreshBtn'),
+    chartTitle: document.getElementById('chartTitle')
 };
 
 // Format number with thousands separator
@@ -47,6 +68,9 @@ function formatCurrency(num, currency = 'CLP') {
 
 // Show notification
 function showNotification(message, type = 'success') {
+    // Remove existing notifications
+    document.querySelectorAll('.notification').forEach(n => n.remove());
+
     const notification = document.createElement('div');
     notification.className = `notification ${type}`;
     notification.textContent = message;
@@ -62,15 +86,14 @@ async function fetchUF() {
     try {
         const response = await fetch(CMF_UF_API);
         const data = await response.json();
-        // CMF returns {UFs: [{Valor: "38.000,00", Fecha: "2025-01-19"}]}
         if (data.UFs && data.UFs.length > 0) {
-            const valorStr = data.UFs[0].Valor.replace('.', '').replace(',', '.');
+            const valorStr = data.UFs[0].Valor.replace(/\./g, '').replace(',', '.');
             return parseFloat(valorStr);
         }
         throw new Error('No UF data');
     } catch (error) {
         console.error('Error fetching UF:', error);
-        throw error;
+        return 38000; // Fallback value
     }
 }
 
@@ -79,24 +102,22 @@ async function fetchDolar() {
     try {
         const response = await fetch(CMF_DOLAR_API);
         const data = await response.json();
-        // CMF returns {Dolares: [{Valor: "950,00", Fecha: "2025-01-19"}]}
         if (data.Dolares && data.Dolares.length > 0) {
-            const valorStr = data.Dolares[0].Valor.replace('.', '').replace(',', '.');
+            const valorStr = data.Dolares[0].Valor.replace(/\./g, '').replace(',', '.');
             return parseFloat(valorStr);
         }
         throw new Error('No Dolar data');
     } catch (error) {
         console.error('Error fetching Dolar:', error);
-        throw error;
+        return 900; // Fallback value
     }
 }
 
-// Fetch IPSA from Yahoo Finance
-async function fetchIPSA() {
+// Fetch stock data from Yahoo Finance
+async function fetchStockData(symbol) {
     try {
-        // Yahoo Finance API endpoint for quote
-        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${IPSA_SYMBOL}?interval=1d&range=1d`;
-        const proxyUrl = YAHOO_FINANCE_PROXY + encodeURIComponent(url);
+        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=1d`;
+        const proxyUrl = CORS_PROXY + encodeURIComponent(url);
 
         const response = await fetch(proxyUrl);
         const data = await response.json();
@@ -106,48 +127,71 @@ async function fetchIPSA() {
             const meta = result.meta;
             return {
                 current: meta.regularMarketPrice,
-                previous: meta.previousClose || meta.chartPreviousClose
+                previous: meta.previousClose || meta.chartPreviousClose || meta.regularMarketPrice
             };
         }
-        throw new Error('No IPSA data from Yahoo');
+        throw new Error('No data from Yahoo');
     } catch (error) {
-        console.error('Error fetching IPSA from Yahoo:', error);
+        console.error('Error fetching stock data:', error);
         throw error;
     }
 }
 
-// Fetch IPSA historical data from Yahoo Finance
-async function fetchIpsaHistory(days = 30) {
+// Fetch historical data from Yahoo Finance
+async function fetchHistoricalData(symbol, days = 30) {
     try {
-        const range = days <= 7 ? '7d' : days <= 30 ? '1mo' : '3mo';
-        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${IPSA_SYMBOL}?interval=1d&range=${range}`;
-        const proxyUrl = YAHOO_FINANCE_PROXY + encodeURIComponent(url);
+        // Map days to Yahoo Finance range parameter
+        let range = '1mo';
+        if (days <= 7) range = '5d';
+        else if (days <= 30) range = '1mo';
+        else if (days <= 90) range = '3mo';
+        else range = '6mo';
+
+        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=${range}`;
+        const proxyUrl = CORS_PROXY + encodeURIComponent(url);
+
+        console.log('Fetching historical data:', url);
 
         const response = await fetch(proxyUrl);
         const data = await response.json();
 
+        console.log('Yahoo response:', data);
+
         if (data.chart && data.chart.result && data.chart.result[0]) {
             const result = data.chart.result[0];
             const timestamps = result.timestamp || [];
-            const closes = result.indicators.quote[0].close || [];
+            const quotes = result.indicators.quote[0] || {};
+            const closes = quotes.close || [];
+
+            console.log('Timestamps:', timestamps.length, 'Closes:', closes.length);
 
             const history = [];
-            for (let i = 0; i < timestamps.length && i < days; i++) {
-                if (closes[i] !== null) {
+            for (let i = 0; i < timestamps.length; i++) {
+                const closeValue = closes[i];
+                if (closeValue !== null && closeValue !== undefined && !isNaN(closeValue)) {
                     history.push({
                         fecha: new Date(timestamps[i] * 1000).toISOString(),
-                        valor: closes[i]
+                        valor: closeValue
                     });
                 }
+            }
+
+            console.log('Parsed history:', history.length, 'points');
+
+            // Limit to requested days
+            if (history.length > days) {
+                return history.slice(-days);
             }
 
             if (history.length > 0) {
                 return history;
             }
         }
-        throw new Error('No historical data');
+
+        console.warn('No valid historical data found');
+        return null;
     } catch (error) {
-        console.warn('Historical API failed, will use simulated data:', error.message);
+        console.error('Error fetching historical data:', error);
         return null;
     }
 }
@@ -157,25 +201,30 @@ function generateSimulatedHistory(currentValue, days) {
     const data = [];
     const now = new Date();
 
-    for (let i = days - 1; i >= 0; i--) {
+    // Generate data working backwards with realistic market movement
+    let value = currentValue;
+    const dailyVolatility = 0.015; // 1.5% daily volatility
+
+    // First, generate values going backwards
+    const tempData = [];
+    for (let i = 0; i < days; i++) {
         const date = new Date(now);
         date.setDate(date.getDate() - i);
 
-        // Add some realistic random variation (±3%)
-        let value;
-        if (i !== 0) {
-            value = currentValue + (Math.random() - 0.5) * currentValue * 0.03;
-        } else {
-            value = currentValue;
-        }
+        // Skip weekends
+        if (date.getDay() === 0 || date.getDay() === 6) continue;
 
-        data.push({
+        tempData.unshift({
             fecha: date.toISOString(),
             valor: value
         });
+
+        // Random walk backwards
+        const change = (Math.random() - 0.48) * dailyVolatility * value;
+        value = value - change;
     }
 
-    return data;
+    return tempData;
 }
 
 // Calculate change from previous value
@@ -186,12 +235,24 @@ function calculateChange(currentValue, previousValue) {
     return { value: change, percent: percent };
 }
 
-// Update IPSA display
-function updateIpsaDisplay(ipsaValue, previousValue) {
-    elements.ipsaValue.textContent = formatNumber(ipsaValue, 2);
+// Update main display
+function updateMainDisplay(value, previousValue) {
+    const stock = STOCKS[currentSymbol];
+    const isIndex = stock.type === 'index';
 
-    const change = calculateChange(ipsaValue, previousValue);
-    const changeEl = elements.ipsaChange;
+    // Update stock info
+    if (elements.stockName) elements.stockName.textContent = stock.name;
+    if (elements.stockDescription) elements.stockDescription.textContent = stock.description;
+
+    // Update value - show as points for index, CLP for stocks
+    if (isIndex) {
+        elements.mainValue.textContent = formatNumber(value, 2);
+    } else {
+        elements.mainValue.textContent = formatCurrency(value, 'CLP');
+    }
+
+    const change = calculateChange(value, previousValue);
+    const changeEl = elements.valueChange;
 
     if (change.value >= 0) {
         changeEl.className = 'card-change positive';
@@ -209,18 +270,19 @@ function updateIpsaDisplay(ipsaValue, previousValue) {
 }
 
 // Update conversions display
-function updateConversions(ipsaValue, usdRate, ufRate) {
-    // CLP (1 punto IPSA = 1 CLP)
-    const clpValue = ipsaValue;
-    elements.clpValue.textContent = formatCurrency(clpValue, 'CLP');
+function updateConversions(value) {
+    if (!usdRate || !ufRate) return;
+
+    // CLP value
+    elements.clpValue.textContent = formatCurrency(value, 'CLP');
 
     // USD conversion
-    const usdValue = clpValue / usdRate;
+    const usdValue = value / usdRate;
     elements.usdValue.textContent = formatCurrency(usdValue, 'USD');
     elements.usdRate.textContent = formatCurrency(usdRate, 'CLP');
 
     // UF conversion
-    const ufValue = clpValue / ufRate;
+    const ufValue = value / ufRate;
     elements.ufValue.textContent = ufValue.toFixed(6) + ' UF';
     elements.ufRate.textContent = formatCurrency(ufRate, 'CLP');
 }
@@ -242,6 +304,12 @@ function updateTimestamp() {
 // Initialize or update chart
 function updateChart(data, isSimulated = false) {
     const ctx = document.getElementById('ipsaChart').getContext('2d');
+    const stock = STOCKS[currentSymbol];
+
+    // Update chart title
+    if (elements.chartTitle) {
+        elements.chartTitle.textContent = `Evolución de ${stock.name}`;
+    }
 
     const labels = data.map(item => {
         const date = new Date(item.fecha);
@@ -256,80 +324,82 @@ function updateChart(data, isSimulated = false) {
 
     const borderColor = isSimulated ? '#9c27b0' : '#1a73e8';
 
+    const chartData = {
+        labels: labels,
+        datasets: [{
+            label: `${stock.name} (CLP)`,
+            data: values,
+            borderColor: borderColor,
+            backgroundColor: gradient,
+            borderWidth: 3,
+            fill: true,
+            tension: 0.4,
+            pointRadius: data.length > 30 ? 2 : 4,
+            pointHoverRadius: 6,
+            pointBackgroundColor: borderColor,
+            pointBorderColor: '#fff',
+            pointBorderWidth: 2
+        }]
+    };
+
+    const chartOptions = {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: {
+            intersect: false,
+            mode: 'index'
+        },
+        plugins: {
+            legend: {
+                display: false
+            },
+            tooltip: {
+                backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                titleFont: { size: 14 },
+                bodyFont: { size: 13 },
+                padding: 12,
+                displayColors: false,
+                callbacks: {
+                    label: function(context) {
+                        const suffix = isSimulated ? ' (estimado)' : '';
+                        return `${stock.name}: ${formatCurrency(context.parsed.y, 'CLP')}${suffix}`;
+                    }
+                }
+            }
+        },
+        scales: {
+            x: {
+                grid: {
+                    display: false
+                },
+                ticks: {
+                    maxRotation: 45,
+                    minRotation: 45,
+                    maxTicksLimit: 10
+                }
+            },
+            y: {
+                grid: {
+                    color: 'rgba(0, 0, 0, 0.05)'
+                },
+                ticks: {
+                    callback: function(value) {
+                        return formatNumber(value, 0);
+                    }
+                }
+            }
+        }
+    };
+
     if (ipsaChart) {
-        ipsaChart.data.labels = labels;
-        ipsaChart.data.datasets[0].data = values;
-        ipsaChart.data.datasets[0].borderColor = borderColor;
-        ipsaChart.data.datasets[0].pointBackgroundColor = borderColor;
-        ipsaChart.data.datasets[0].backgroundColor = gradient;
+        ipsaChart.data = chartData;
+        ipsaChart.options = chartOptions;
         ipsaChart.update('active');
     } else {
         ipsaChart = new Chart(ctx, {
             type: 'line',
-            data: {
-                labels: labels,
-                datasets: [{
-                    label: 'IPSA (Puntos)',
-                    data: values,
-                    borderColor: borderColor,
-                    backgroundColor: gradient,
-                    borderWidth: 3,
-                    fill: true,
-                    tension: 0.4,
-                    pointRadius: 4,
-                    pointHoverRadius: 6,
-                    pointBackgroundColor: borderColor,
-                    pointBorderColor: '#fff',
-                    pointBorderWidth: 2
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                interaction: {
-                    intersect: false,
-                    mode: 'index'
-                },
-                plugins: {
-                    legend: {
-                        display: false
-                    },
-                    tooltip: {
-                        backgroundColor: 'rgba(0, 0, 0, 0.8)',
-                        titleFont: { size: 14 },
-                        bodyFont: { size: 13 },
-                        padding: 12,
-                        displayColors: false,
-                        callbacks: {
-                            label: function(context) {
-                                const suffix = isSimulated ? ' (estimado)' : '';
-                                return `IPSA: ${formatNumber(context.parsed.y, 2)} puntos${suffix}`;
-                            }
-                        }
-                    }
-                },
-                scales: {
-                    x: {
-                        grid: {
-                            display: false
-                        },
-                        ticks: {
-                            maxRotation: 45,
-                            minRotation: 45
-                        }
-                    },
-                    y: {
-                        grid: {
-                            color: 'rgba(0, 0, 0, 0.05)'
-                        },
-                        ticks: {
-                            callback: function(value) {
-                                return formatNumber(value, 0);
-                            }
-                        }
-                    }
-                }
-            }
+            data: chartData,
+            options: chartOptions
         });
     }
 }
@@ -344,29 +414,33 @@ async function refreshData() {
     document.querySelectorAll('.card-value').forEach(el => el.classList.add('updating'));
 
     try {
-        // Fetch all data in parallel
-        const [ipsaData, usdRate, ufRate, ipsaHistory] = await Promise.all([
-            fetchIPSA(),
-            fetchDolar(),
-            fetchUF(),
-            fetchIpsaHistory(currentPeriod)
+        // Fetch exchange rates if not loaded
+        if (!usdRate || !ufRate) {
+            [usdRate, ufRate] = await Promise.all([fetchDolar(), fetchUF()]);
+        }
+
+        // Fetch stock data and history in parallel
+        const [stockData, history] = await Promise.all([
+            fetchStockData(currentSymbol),
+            fetchHistoricalData(currentSymbol, currentPeriod)
         ]);
 
-        const currentIpsa = ipsaData.current;
-        const previousIpsa = ipsaData.previous;
+        const currentValue = stockData.current;
+        const previousValue = stockData.previous;
 
         // Use real history or generate simulated
-        let chartData = ipsaHistory;
+        let chartData = history;
         let isSimulated = false;
 
-        if (!chartData) {
-            chartData = generateSimulatedHistory(currentIpsa, currentPeriod);
+        if (!chartData || chartData.length < 2) {
+            chartData = generateSimulatedHistory(currentValue, currentPeriod);
             isSimulated = true;
+            console.log('Using simulated data with', chartData.length, 'points');
         }
 
         // Update displays
-        updateIpsaDisplay(currentIpsa, previousIpsa);
-        updateConversions(currentIpsa, usdRate, ufRate);
+        updateMainDisplay(currentValue, previousValue);
+        updateConversions(currentValue);
         updateTimestamp();
 
         // Update chart
@@ -374,7 +448,7 @@ async function refreshData() {
         updateChart(historicalData, isSimulated);
 
         // Store last value
-        lastIpsaValue = currentIpsa;
+        lastValue = currentValue;
 
         if (isSimulated) {
             showNotification('Datos actualizados (gráfico estimado)', 'success');
@@ -387,8 +461,8 @@ async function refreshData() {
         showNotification('Error al actualizar los datos. Intente nuevamente.', 'error');
 
         // Show error in values if no previous data
-        if (!lastIpsaValue) {
-            elements.ipsaValue.textContent = 'Error';
+        if (!lastValue) {
+            elements.mainValue.textContent = 'Error';
             elements.clpValue.textContent = 'Error';
             elements.usdValue.textContent = 'Error';
             elements.ufValue.textContent = 'Error';
@@ -400,39 +474,69 @@ async function refreshData() {
     }
 }
 
-// Period button handlers
-document.querySelectorAll('.period-btn').forEach(btn => {
-    btn.addEventListener('click', async function() {
-        // Update active button
-        document.querySelectorAll('.period-btn').forEach(b => b.classList.remove('active'));
-        this.classList.add('active');
+// Initialize stock selector
+function initStockSelector() {
+    const selector = elements.stockSelector;
+    if (!selector) return;
 
-        // Update period and fetch new data
-        currentPeriod = parseInt(this.dataset.period);
+    // Populate selector
+    selector.innerHTML = '';
+    for (const [symbol, info] of Object.entries(STOCKS)) {
+        const option = document.createElement('option');
+        option.value = symbol;
+        option.textContent = `${info.name} - ${info.description}`;
+        selector.appendChild(option);
+    }
 
-        try {
-            let ipsaHistory = await fetchIpsaHistory(currentPeriod);
-            let isSimulated = false;
-
-            if (!ipsaHistory && lastIpsaValue) {
-                ipsaHistory = generateSimulatedHistory(lastIpsaValue, currentPeriod);
-                isSimulated = true;
-            }
-
-            if (ipsaHistory) {
-                historicalData = ipsaHistory;
-                updateChart(historicalData, isSimulated);
-            }
-        } catch (error) {
-            showNotification('Error al cargar datos del período', 'error');
-        }
+    // Handle selection change
+    selector.addEventListener('change', async function() {
+        currentSymbol = this.value;
+        await refreshData();
     });
-});
+}
+
+// Period button handlers
+function initPeriodButtons() {
+    document.querySelectorAll('.period-btn').forEach(btn => {
+        btn.addEventListener('click', async function() {
+            // Update active button
+            document.querySelectorAll('.period-btn').forEach(b => b.classList.remove('active'));
+            this.classList.add('active');
+
+            // Update period and fetch new data
+            currentPeriod = parseInt(this.dataset.period);
+
+            try {
+                let history = await fetchHistoricalData(currentSymbol, currentPeriod);
+                let isSimulated = false;
+
+                if (!history || history.length < 2) {
+                    if (lastValue) {
+                        history = generateSimulatedHistory(lastValue, currentPeriod);
+                        isSimulated = true;
+                    }
+                }
+
+                if (history) {
+                    historicalData = history;
+                    updateChart(historicalData, isSimulated);
+                }
+            } catch (error) {
+                showNotification('Error al cargar datos del período', 'error');
+            }
+        });
+    });
+}
 
 // Auto-refresh every 5 minutes
 setInterval(refreshData, 5 * 60 * 1000);
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
+    initStockSelector();
+    initPeriodButtons();
     refreshData();
 });
+
+// Expose refresh function globally
+window.refreshData = refreshData;

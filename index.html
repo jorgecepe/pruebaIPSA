@@ -19,17 +19,25 @@
             <button id="refreshBtn" onclick="refreshData()">🔄 Actualizar</button>
         </div>
 
+        <!-- Stock Selector -->
+        <div class="selector-container">
+            <label for="stockSelector">Seleccionar Activo:</label>
+            <select id="stockSelector">
+                <!-- Options will be populated by JavaScript -->
+            </select>
+        </div>
+
         <div class="cards-container">
-            <!-- IPSA Card -->
-            <div class="card ipsa-card">
+            <!-- Main Value Card -->
+            <div class="card main-card">
                 <div class="card-header">
-                    <h2>IPSA</h2>
-                    <span class="badge">Puntos</span>
+                    <h2 id="stockName">IPSA</h2>
+                    <span class="badge" id="stockDescription">Índice IPSA</span>
                 </div>
                 <div class="card-value">
-                    <span id="ipsaValue">--</span>
+                    <span id="mainValue">--</span>
                 </div>
-                <div class="card-change" id="ipsaChange">
+                <div class="card-change" id="valueChange">
                     <span class="change-value">--</span>
                     <span class="change-percent">--</span>
                 </div>
@@ -45,7 +53,7 @@
                     <span id="clpValue">--</span>
                 </div>
                 <div class="card-subtitle">
-                    1 punto IPSA = $1 CLP
+                    1 punto = $1 CLP
                 </div>
             </div>
 
@@ -83,7 +91,7 @@
         <!-- Chart Section -->
         <div class="chart-section">
             <div class="chart-header">
-                <h2>Evolución del IPSA</h2>
+                <h2 id="chartTitle">Evolución del IPSA</h2>
                 <div class="chart-controls">
                     <button class="period-btn active" data-period="7">7 días</button>
                     <button class="period-btn" data-period="30">30 días</button>
@@ -100,9 +108,9 @@
             <h3>ℹ️ Información</h3>
             <p>El <strong>IPSA</strong> (Índice de Precio Selectivo de Acciones) es el principal índice bursátil de Chile,
                compuesto por las 30 acciones más transadas de la Bolsa de Santiago.</p>
-            <p>Esta aplicación convierte los puntos IPSA como si fueran pesos chilenos para mostrar su equivalencia en USD y UF.</p>
+            <p>Esta aplicación convierte los puntos IPSA (o precio de acciones) como si fueran pesos chilenos para mostrar su equivalencia en USD y UF.</p>
             <div class="data-sources">
-                <span>Fuentes de datos: CMF Chile (USD/UF) | Yahoo Finance (IPSA)</span>
+                <span>Fuentes de datos: CMF Chile (USD/UF) | Yahoo Finance (IPSA y Acciones)</span>
             </div>
         </div>
 
