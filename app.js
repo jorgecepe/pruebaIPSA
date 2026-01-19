@@ -8,6 +8,23 @@ let lastIpsaValue = null;
 
 // API endpoints
 const MINDICADOR_API = 'https://mindicador.cl/api';
+const CORS_PROXY = 'https://corsproxy.io/?';
+
+// Helper to fetch with CORS proxy fallback
+async function fetchWithCors(url) {
+    try {
+        // Try direct fetch first
+        const response = await fetch(url);
+        if (response.ok) return response;
+        throw new Error('Direct fetch failed');
+    } catch (error) {
+        // Fallback to CORS proxy
+        console.log('Using CORS proxy for:', url);
+        const proxyResponse = await fetch(CORS_PROXY + encodeURIComponent(url));
+        if (!proxyResponse.ok) throw new Error('Proxy fetch failed');
+        return proxyResponse;
+    }
+}
 
 // DOM Elements
 const elements = {
@@ -56,8 +73,7 @@ function showNotification(message, type = 'success') {
 // Fetch data from mindicador.cl API
 async function fetchMindicadorData() {
     try {
-        const response = await fetch(MINDICADOR_API);
-        if (!response.ok) throw new Error('Error al obtener datos');
+        const response = await fetchWithCors(MINDICADOR_API);
         return await response.json();
     } catch (error) {
         console.error('Error fetching mindicador data:', error);
@@ -68,8 +84,7 @@ async function fetchMindicadorData() {
 // Fetch IPSA historical data from mindicador
 async function fetchIpsaHistory(days = 30) {
     try {
-        const response = await fetch(`${MINDICADOR_API}/ipsa`);
-        if (!response.ok) throw new Error('Error al obtener histórico IPSA');
+        const response = await fetchWithCors(`${MINDICADOR_API}/ipsa`);
         const data = await response.json();
         return data.serie.slice(0, days).reverse();
     } catch (error) {
