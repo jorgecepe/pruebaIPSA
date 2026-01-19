@@ -7,24 +7,11 @@ let historicalData = [];
 let lastIpsaValue = null;
 
 // API endpoints
-const MINDICADOR_API = 'https://mindicador.cl/api';
-const CORS_PROXY = 'https://corsproxy.io/?';
-
-// Helper to fetch with CORS proxy fallback
-async function fetchWithCors(url) {
-    try {
-        // Try direct fetch first
-        const response = await fetch(url);
-        if (response.ok) return response;
-        throw new Error('Direct fetch failed');
-    } catch (error) {
-        // Fallback to CORS proxy
-        console.log('Using CORS proxy for:', url);
-        const proxyResponse = await fetch(CORS_PROXY + encodeURIComponent(url));
-        if (!proxyResponse.ok) throw new Error('Proxy fetch failed');
-        return proxyResponse;
-    }
-}
+const CMF_API_KEY = '10affc3841d7013d0374f12e609a31dd7ffe4090';
+const CMF_UF_API = `https://api.cmfchile.cl/api-sbifv3/recursos_api/uf?apikey=${CMF_API_KEY}&formato=json`;
+const CMF_DOLAR_API = `https://api.cmfchile.cl/api-sbifv3/recursos_api/dolar?apikey=${CMF_API_KEY}&formato=json`;
+const YAHOO_FINANCE_PROXY = 'https://corsproxy.io/?';
+const IPSA_SYMBOL = '^IPSA';
 
 // DOM Elements
 const elements = {
@@ -70,27 +57,125 @@ function showNotification(message, type = 'success') {
     }, 3000);
 }
 
-// Fetch data from mindicador.cl API
-async function fetchMindicadorData() {
+// Fetch UF from CMF Chile
+async function fetchUF() {
     try {
-        const response = await fetchWithCors(MINDICADOR_API);
-        return await response.json();
+        const response = await fetch(CMF_UF_API);
+        const data = await response.json();
+        // CMF returns {UFs: [{Valor: "38.000,00", Fecha: "2025-01-19"}]}
+        if (data.UFs && data.UFs.length > 0) {
+            const valorStr = data.UFs[0].Valor.replace('.', '').replace(',', '.');
+            return parseFloat(valorStr);
+        }
+        throw new Error('No UF data');
     } catch (error) {
-        console.error('Error fetching mindicador data:', error);
+        console.error('Error fetching UF:', error);
         throw error;
     }
 }
 
-// Fetch IPSA historical data from mindicador
-async function fetchIpsaHistory(days = 30) {
+// Fetch Dolar from CMF Chile
+async function fetchDolar() {
     try {
-        const response = await fetchWithCors(`${MINDICADOR_API}/ipsa`);
+        const response = await fetch(CMF_DOLAR_API);
         const data = await response.json();
-        return data.serie.slice(0, days).reverse();
+        // CMF returns {Dolares: [{Valor: "950,00", Fecha: "2025-01-19"}]}
+        if (data.Dolares && data.Dolares.length > 0) {
+            const valorStr = data.Dolares[0].Valor.replace('.', '').replace(',', '.');
+            return parseFloat(valorStr);
+        }
+        throw new Error('No Dolar data');
     } catch (error) {
-        console.error('Error fetching IPSA history:', error);
+        console.error('Error fetching Dolar:', error);
         throw error;
     }
+}
+
+// Fetch IPSA from Yahoo Finance
+async function fetchIPSA() {
+    try {
+        // Yahoo Finance API endpoint for quote
+        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${IPSA_SYMBOL}?interval=1d&range=1d`;
+        const proxyUrl = YAHOO_FINANCE_PROXY + encodeURIComponent(url);
+
+        const response = await fetch(proxyUrl);
+        const data = await response.json();
+
+        if (data.chart && data.chart.result && data.chart.result[0]) {
+            const result = data.chart.result[0];
+            const meta = result.meta;
+            return {
+                current: meta.regularMarketPrice,
+                previous: meta.previousClose || meta.chartPreviousClose
+            };
+        }
+        throw new Error('No IPSA data from Yahoo');
+    } catch (error) {
+        console.error('Error fetching IPSA from Yahoo:', error);
+        throw error;
+    }
+}
+
+// Fetch IPSA historical data from Yahoo Finance
+async function fetchIpsaHistory(days = 30) {
+    try {
+        const range = days <= 7 ? '7d' : days <= 30 ? '1mo' : '3mo';
+        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${IPSA_SYMBOL}?interval=1d&range=${range}`;
+        const proxyUrl = YAHOO_FINANCE_PROXY + encodeURIComponent(url);
+
+        const response = await fetch(proxyUrl);
+        const data = await response.json();
+
+        if (data.chart && data.chart.result && data.chart.result[0]) {
+            const result = data.chart.result[0];
+            const timestamps = result.timestamp || [];
+            const closes = result.indicators.quote[0].close || [];
+
+            const history = [];
+            for (let i = 0; i < timestamps.length && i < days; i++) {
+                if (closes[i] !== null) {
+                    history.push({
+                        fecha: new Date(timestamps[i] * 1000).toISOString(),
+                        valor: closes[i]
+                    });
+                }
+            }
+
+            if (history.length > 0) {
+                return history;
+            }
+        }
+        throw new Error('No historical data');
+    } catch (error) {
+        console.warn('Historical API failed, will use simulated data:', error.message);
+        return null;
+    }
+}
+
+// Generate simulated historical data based on current value
+function generateSimulatedHistory(currentValue, days) {
+    const data = [];
+    const now = new Date();
+
+    for (let i = days - 1; i >= 0; i--) {
+        const date = new Date(now);
+        date.setDate(date.getDate() - i);
+
+        // Add some realistic random variation (±3%)
+        let value;
+        if (i !== 0) {
+            value = currentValue + (Math.random() - 0.5) * currentValue * 0.03;
+        } else {
+            value = currentValue;
+        }
+
+        data.push({
+            fecha: date.toISOString(),
+            valor: value
+        });
+    }
+
+    return data;
 }
 
 // Calculate change from previous value
@@ -155,7 +240,7 @@ function updateTimestamp() {
 }
 
 // Initialize or update chart
-function updateChart(data) {
+function updateChart(data, isSimulated = false) {
     const ctx = document.getElementById('ipsaChart').getContext('2d');
 
     const labels = data.map(item => {
@@ -166,12 +251,17 @@ function updateChart(data) {
     const values = data.map(item => item.valor);
 
     const gradient = ctx.createLinearGradient(0, 0, 0, 400);
-    gradient.addColorStop(0, 'rgba(26, 115, 232, 0.3)');
+    gradient.addColorStop(0, isSimulated ? 'rgba(156, 39, 176, 0.3)' : 'rgba(26, 115, 232, 0.3)');
     gradient.addColorStop(1, 'rgba(26, 115, 232, 0.0)');
+
+    const borderColor = isSimulated ? '#9c27b0' : '#1a73e8';
 
     if (ipsaChart) {
         ipsaChart.data.labels = labels;
         ipsaChart.data.datasets[0].data = values;
+        ipsaChart.data.datasets[0].borderColor = borderColor;
+        ipsaChart.data.datasets[0].pointBackgroundColor = borderColor;
+        ipsaChart.data.datasets[0].backgroundColor = gradient;
         ipsaChart.update('active');
     } else {
         ipsaChart = new Chart(ctx, {
@@ -181,14 +271,14 @@ function updateChart(data) {
                 datasets: [{
                     label: 'IPSA (Puntos)',
                     data: values,
-                    borderColor: '#1a73e8',
+                    borderColor: borderColor,
                     backgroundColor: gradient,
                     borderWidth: 3,
                     fill: true,
                     tension: 0.4,
                     pointRadius: 4,
                     pointHoverRadius: 6,
-                    pointBackgroundColor: '#1a73e8',
+                    pointBackgroundColor: borderColor,
                     pointBorderColor: '#fff',
                     pointBorderWidth: 2
                 }]
@@ -212,7 +302,8 @@ function updateChart(data) {
                         displayColors: false,
                         callbacks: {
                             label: function(context) {
-                                return `IPSA: ${formatNumber(context.parsed.y, 2)} puntos`;
+                                const suffix = isSimulated ? ' (estimado)' : '';
+                                return `IPSA: ${formatNumber(context.parsed.y, 2)} puntos${suffix}`;
                             }
                         }
                     }
@@ -253,20 +344,25 @@ async function refreshData() {
     document.querySelectorAll('.card-value').forEach(el => el.classList.add('updating'));
 
     try {
-        // Fetch all data
-        const [mindicadorData, ipsaHistory] = await Promise.all([
-            fetchMindicadorData(),
+        // Fetch all data in parallel
+        const [ipsaData, usdRate, ufRate, ipsaHistory] = await Promise.all([
+            fetchIPSA(),
+            fetchDolar(),
+            fetchUF(),
             fetchIpsaHistory(currentPeriod)
         ]);
 
-        // Extract rates
-        const usdRate = mindicadorData.dolar.valor;
-        const ufRate = mindicadorData.uf.valor;
-        const ipsaData = mindicadorData.ipsa;
+        const currentIpsa = ipsaData.current;
+        const previousIpsa = ipsaData.previous;
 
-        // Get current IPSA value and previous
-        const currentIpsa = ipsaData.valor;
-        const previousIpsa = ipsaHistory.length > 1 ? ipsaHistory[ipsaHistory.length - 2].valor : null;
+        // Use real history or generate simulated
+        let chartData = ipsaHistory;
+        let isSimulated = false;
+
+        if (!chartData) {
+            chartData = generateSimulatedHistory(currentIpsa, currentPeriod);
+            isSimulated = true;
+        }
 
         // Update displays
         updateIpsaDisplay(currentIpsa, previousIpsa);
@@ -274,13 +370,17 @@ async function refreshData() {
         updateTimestamp();
 
         // Update chart
-        historicalData = ipsaHistory;
-        updateChart(historicalData);
+        historicalData = chartData;
+        updateChart(historicalData, isSimulated);
 
-        // Store last value for next comparison
+        // Store last value
         lastIpsaValue = currentIpsa;
 
-        showNotification('Datos actualizados correctamente');
+        if (isSimulated) {
+            showNotification('Datos actualizados (gráfico estimado)', 'success');
+        } else {
+            showNotification('Datos actualizados correctamente');
+        }
 
     } catch (error) {
         console.error('Error refreshing data:', error);
@@ -311,9 +411,18 @@ document.querySelectorAll('.period-btn').forEach(btn => {
         currentPeriod = parseInt(this.dataset.period);
 
         try {
-            const ipsaHistory = await fetchIpsaHistory(currentPeriod);
-            historicalData = ipsaHistory;
-            updateChart(historicalData);
+            let ipsaHistory = await fetchIpsaHistory(currentPeriod);
+            let isSimulated = false;
+
+            if (!ipsaHistory && lastIpsaValue) {
+                ipsaHistory = generateSimulatedHistory(lastIpsaValue, currentPeriod);
+                isSimulated = true;
+            }
+
+            if (ipsaHistory) {
+                historicalData = ipsaHistory;
+                updateChart(historicalData, isSimulated);
+            }
         } catch (error) {
             showNotification('Error al cargar datos del período', 'error');
         }
