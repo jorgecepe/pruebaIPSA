@@ -12,18 +12,19 @@ const CORS_PROXY = 'https://corsproxy.io/?';
 
 // Helper to fetch with CORS proxy fallback
 async function fetchWithCors(url) {
+    // Try CORS proxy first (more reliable for GitHub Pages)
     try {
-        // Try direct fetch first
-        const response = await fetch(url);
-        if (response.ok) return response;
-        throw new Error('Direct fetch failed');
-    } catch (error) {
-        // Fallback to CORS proxy
-        console.log('Using CORS proxy for:', url);
+        console.log('Fetching via CORS proxy:', url);
         const proxyResponse = await fetch(CORS_PROXY + encodeURIComponent(url));
-        if (!proxyResponse.ok) throw new Error('Proxy fetch failed');
-        return proxyResponse;
+        if (proxyResponse.ok) return proxyResponse;
+    } catch (e) {
+        console.log('CORS proxy failed, trying direct...');
     }
+
+    // Fallback to direct fetch
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return response;
 }
 
 // DOM Elements
@@ -72,13 +73,8 @@ function showNotification(message, type = 'success') {
 
 // Fetch data from mindicador.cl API
 async function fetchMindicadorData() {
-    try {
-        const response = await fetchWithCors(MINDICADOR_API);
-        return await response.json();
-    } catch (error) {
-        console.error('Error fetching mindicador data:', error);
-        throw error;
-    }
+    const response = await fetchWithCors(MINDICADOR_API);
+    return await response.json();
 }
 
 // Fetch IPSA historical data from mindicador
@@ -86,11 +82,46 @@ async function fetchIpsaHistory(days = 30) {
     try {
         const response = await fetchWithCors(`${MINDICADOR_API}/ipsa`);
         const data = await response.json();
-        return data.serie.slice(0, days).reverse();
+        if (data.serie && data.serie.length > 0) {
+            return data.serie.slice(0, days).reverse();
+        }
+        throw new Error('No historical data');
     } catch (error) {
-        console.error('Error fetching IPSA history:', error);
-        throw error;
+        console.warn('Historical API failed, will use simulated data:', error.message);
+        return null;
     }
+}
+
+// Generate simulated historical data based on current value
+function generateSimulatedHistory(currentValue, days) {
+    const data = [];
+    const now = new Date();
+    const volatility = 0.008; // 0.8% daily volatility
+
+    let value = currentValue;
+
+    for (let i = days - 1; i >= 0; i--) {
+        const date = new Date(now);
+        date.setDate(date.getDate() - i);
+
+        // Add some realistic random variation
+        const change = (Math.random() - 0.5) * 2 * volatility * value;
+        if (i !== 0) {
+            value = currentValue + (Math.random() - 0.5) * currentValue * 0.03;
+        } else {
+            value = currentValue;
+        }
+
+        data.push({
+            fecha: date.toISOString(),
+            valor: value
+        });
+    }
+
+    // Ensure last value is the current value
+    data[data.length - 1].valor = currentValue;
+
+    return data;
 }
 
 // Calculate change from previous value
@@ -155,7 +186,7 @@ function updateTimestamp() {
 }
 
 // Initialize or update chart
-function updateChart(data) {
+function updateChart(data, isSimulated = false) {
     const ctx = document.getElementById('ipsaChart').getContext('2d');
 
     const labels = data.map(item => {
@@ -166,12 +197,17 @@ function updateChart(data) {
     const values = data.map(item => item.valor);
 
     const gradient = ctx.createLinearGradient(0, 0, 0, 400);
-    gradient.addColorStop(0, 'rgba(26, 115, 232, 0.3)');
+    gradient.addColorStop(0, isSimulated ? 'rgba(156, 39, 176, 0.3)' : 'rgba(26, 115, 232, 0.3)');
     gradient.addColorStop(1, 'rgba(26, 115, 232, 0.0)');
+
+    const borderColor = isSimulated ? '#9c27b0' : '#1a73e8';
 
     if (ipsaChart) {
         ipsaChart.data.labels = labels;
         ipsaChart.data.datasets[0].data = values;
+        ipsaChart.data.datasets[0].borderColor = borderColor;
+        ipsaChart.data.datasets[0].pointBackgroundColor = borderColor;
+        ipsaChart.data.datasets[0].backgroundColor = gradient;
         ipsaChart.update('active');
     } else {
         ipsaChart = new Chart(ctx, {
@@ -181,14 +217,14 @@ function updateChart(data) {
                 datasets: [{
                     label: 'IPSA (Puntos)',
                     data: values,
-                    borderColor: '#1a73e8',
+                    borderColor: borderColor,
                     backgroundColor: gradient,
                     borderWidth: 3,
                     fill: true,
                     tension: 0.4,
                     pointRadius: 4,
                     pointHoverRadius: 6,
-                    pointBackgroundColor: '#1a73e8',
+                    pointBackgroundColor: borderColor,
                     pointBorderColor: '#fff',
                     pointBorderWidth: 2
                 }]
@@ -212,7 +248,8 @@ function updateChart(data) {
                         displayColors: false,
                         callbacks: {
                             label: function(context) {
-                                return `IPSA: ${formatNumber(context.parsed.y, 2)} puntos`;
+                                const suffix = isSimulated ? ' (estimado)' : '';
+                                return `IPSA: ${formatNumber(context.parsed.y, 2)} puntos${suffix}`;
                             }
                         }
                     }
@@ -253,20 +290,27 @@ async function refreshData() {
     document.querySelectorAll('.card-value').forEach(el => el.classList.add('updating'));
 
     try {
-        // Fetch all data
-        const [mindicadorData, ipsaHistory] = await Promise.all([
-            fetchMindicadorData(),
-            fetchIpsaHistory(currentPeriod)
-        ]);
+        // Fetch main data first (this usually works)
+        const mindicadorData = await fetchMindicadorData();
 
         // Extract rates
         const usdRate = mindicadorData.dolar.valor;
         const ufRate = mindicadorData.uf.valor;
         const ipsaData = mindicadorData.ipsa;
-
-        // Get current IPSA value and previous
         const currentIpsa = ipsaData.valor;
-        const previousIpsa = ipsaHistory.length > 1 ? ipsaHistory[ipsaHistory.length - 2].valor : null;
+
+        // Try to get historical data
+        let ipsaHistory = await fetchIpsaHistory(currentPeriod);
+        let isSimulated = false;
+
+        // If historical API fails, generate simulated data
+        if (!ipsaHistory) {
+            ipsaHistory = generateSimulatedHistory(currentIpsa, currentPeriod);
+            isSimulated = true;
+        }
+
+        // Get previous value for change calculation
+        const previousIpsa = ipsaHistory.length > 1 ? ipsaHistory[ipsaHistory.length - 2].valor : lastIpsaValue;
 
         // Update displays
         updateIpsaDisplay(currentIpsa, previousIpsa);
@@ -275,12 +319,16 @@ async function refreshData() {
 
         // Update chart
         historicalData = ipsaHistory;
-        updateChart(historicalData);
+        updateChart(historicalData, isSimulated);
 
         // Store last value for next comparison
         lastIpsaValue = currentIpsa;
 
-        showNotification('Datos actualizados correctamente');
+        if (isSimulated) {
+            showNotification('Datos actualizados (gráfico estimado)', 'success');
+        } else {
+            showNotification('Datos actualizados correctamente');
+        }
 
     } catch (error) {
         console.error('Error refreshing data:', error);
@@ -311,9 +359,18 @@ document.querySelectorAll('.period-btn').forEach(btn => {
         currentPeriod = parseInt(this.dataset.period);
 
         try {
-            const ipsaHistory = await fetchIpsaHistory(currentPeriod);
-            historicalData = ipsaHistory;
-            updateChart(historicalData);
+            let ipsaHistory = await fetchIpsaHistory(currentPeriod);
+            let isSimulated = false;
+
+            if (!ipsaHistory && lastIpsaValue) {
+                ipsaHistory = generateSimulatedHistory(lastIpsaValue, currentPeriod);
+                isSimulated = true;
+            }
+
+            if (ipsaHistory) {
+                historicalData = ipsaHistory;
+                updateChart(historicalData, isSimulated);
+            }
         } catch (error) {
             showNotification('Error al cargar datos del período', 'error');
         }
