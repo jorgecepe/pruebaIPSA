@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IPSA Tracker - Índice Bursátil de Chile</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📈 IPSA Tracker</h1>
+            <p class="subtitle">Índice de Precios Selectivo de Acciones - Chile</p>
+        </header>
+
+        <div class="update-info">
+            <span id="lastUpdate">Última actualización: --</span>
+            <button id="refreshBtn" onclick="refreshData()">🔄 Actualizar</button>
+        </div>
+
+        <div class="cards-container">
+            <!-- IPSA Card -->
+            <div class="card ipsa-card">
+                <div class="card-header">
+                    <h2>IPSA</h2>
+                    <span class="badge">Puntos</span>
+                </div>
+                <div class="card-value">
+                    <span id="ipsaValue">--</span>
+                </div>
+                <div class="card-change" id="ipsaChange">
+                    <span class="change-value">--</span>
+                    <span class="change-percent">--</span>
+                </div>
+            </div>
+
+            <!-- CLP Card -->
+            <div class="card clp-card">
+                <div class="card-header">
+                    <h2>Valor en CLP</h2>
+                    <span class="badge">Pesos</span>
+                </div>
+                <div class="card-value">
+                    <span id="clpValue">--</span>
+                </div>
+                <div class="card-subtitle">
+                    1 punto IPSA = $1 CLP
+                </div>
+            </div>
+
+            <!-- USD Card -->
+            <div class="card usd-card">
+                <div class="card-header">
+                    <h2>Valor en USD</h2>
+                    <span class="badge">Dólares</span>
+                </div>
+                <div class="card-value">
+                    <span id="usdValue">--</span>
+                </div>
+                <div class="card-rate">
+                    <span>Tipo de cambio: </span>
+                    <span id="usdRate">--</span>
+                </div>
+            </div>
+
+            <!-- UF Card -->
+            <div class="card uf-card">
+                <div class="card-header">
+                    <h2>Valor en UF</h2>
+                    <span class="badge">Unidad de Fomento</span>
+                </div>
+                <div class="card-value">
+                    <span id="ufValue">--</span>
+                </div>
+                <div class="card-rate">
+                    <span>Valor UF: </span>
+                    <span id="ufRate">--</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Chart Section -->
+        <div class="chart-section">
+            <div class="chart-header">
+                <h2>Evolución del IPSA</h2>
+                <div class="chart-controls">
+                    <button class="period-btn active" data-period="7">7 días</button>
+                    <button class="period-btn" data-period="30">30 días</button>
+                    <button class="period-btn" data-period="90">90 días</button>
+                </div>
+            </div>
+            <div class="chart-container">
+                <canvas id="ipsaChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Info Section -->
+        <div class="info-section">
+            <h3>ℹ️ Información</h3>
+            <p>El <strong>IPSA</strong> (Índice de Precio Selectivo de Acciones) es el principal índice bursátil de Chile,
+               compuesto por las 30 acciones más transadas de la Bolsa de Santiago.</p>
+            <p>Esta aplicación convierte los puntos IPSA como si fueran pesos chilenos para mostrar su equivalencia en USD y UF.</p>
+            <div class="data-sources">
+                <span>Fuentes de datos: mindicador.cl | Yahoo Finance</span>
+            </div>
+        </div>
+
+        <footer>
+            <p>IPSA Tracker © 2025 - Datos con fines informativos</p>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
