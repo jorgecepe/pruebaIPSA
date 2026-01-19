@@ -7,25 +7,11 @@ let historicalData = [];
 let lastIpsaValue = null;
 
 // API endpoints
-const MINDICADOR_API = 'https://mindicador.cl/api';
-const CORS_PROXY = 'https://corsproxy.io/?';
-
-// Helper to fetch with CORS proxy fallback
-async function fetchWithCors(url) {
-    // Try CORS proxy first (more reliable for GitHub Pages)
-    try {
-        console.log('Fetching via CORS proxy:', url);
-        const proxyResponse = await fetch(CORS_PROXY + encodeURIComponent(url));
-        if (proxyResponse.ok) return proxyResponse;
-    } catch (e) {
-        console.log('CORS proxy failed, trying direct...');
-    }
-
-    // Fallback to direct fetch
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return response;
-}
+const CMF_API_KEY = '10affc3841d7013d0374f12e609a31dd7ffe4090';
+const CMF_UF_API = `https://api.cmfchile.cl/api-sbifv3/recursos_api/uf?apikey=${CMF_API_KEY}&formato=json`;
+const CMF_DOLAR_API = `https://api.cmfchile.cl/api-sbifv3/recursos_api/dolar?apikey=${CMF_API_KEY}&formato=json`;
+const YAHOO_FINANCE_PROXY = 'https://corsproxy.io/?';
+const IPSA_SYMBOL = '^IPSA';
 
 // DOM Elements
 const elements = {
@@ -71,19 +57,93 @@ function showNotification(message, type = 'success') {
     }, 3000);
 }
 
-// Fetch data from mindicador.cl API
-async function fetchMindicadorData() {
-    const response = await fetchWithCors(MINDICADOR_API);
-    return await response.json();
+// Fetch UF from CMF Chile
+async function fetchUF() {
+    try {
+        const response = await fetch(CMF_UF_API);
+        const data = await response.json();
+        // CMF returns {UFs: [{Valor: "38.000,00", Fecha: "2025-01-19"}]}
+        if (data.UFs && data.UFs.length > 0) {
+            const valorStr = data.UFs[0].Valor.replace('.', '').replace(',', '.');
+            return parseFloat(valorStr);
+        }
+        throw new Error('No UF data');
+    } catch (error) {
+        console.error('Error fetching UF:', error);
+        throw error;
+    }
 }
 
-// Fetch IPSA historical data from mindicador
+// Fetch Dolar from CMF Chile
+async function fetchDolar() {
+    try {
+        const response = await fetch(CMF_DOLAR_API);
+        const data = await response.json();
+        // CMF returns {Dolares: [{Valor: "950,00", Fecha: "2025-01-19"}]}
+        if (data.Dolares && data.Dolares.length > 0) {
+            const valorStr = data.Dolares[0].Valor.replace('.', '').replace(',', '.');
+            return parseFloat(valorStr);
+        }
+        throw new Error('No Dolar data');
+    } catch (error) {
+        console.error('Error fetching Dolar:', error);
+        throw error;
+    }
+}
+
+// Fetch IPSA from Yahoo Finance
+async function fetchIPSA() {
+    try {
+        // Yahoo Finance API endpoint for quote
+        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${IPSA_SYMBOL}?interval=1d&range=1d`;
+        const proxyUrl = YAHOO_FINANCE_PROXY + encodeURIComponent(url);
+
+        const response = await fetch(proxyUrl);
+        const data = await response.json();
+
+        if (data.chart && data.chart.result && data.chart.result[0]) {
+            const result = data.chart.result[0];
+            const meta = result.meta;
+            return {
+                current: meta.regularMarketPrice,
+                previous: meta.previousClose || meta.chartPreviousClose
+            };
+        }
+        throw new Error('No IPSA data from Yahoo');
+    } catch (error) {
+        console.error('Error fetching IPSA from Yahoo:', error);
+        throw error;
+    }
+}
+
+// Fetch IPSA historical data from Yahoo Finance
 async function fetchIpsaHistory(days = 30) {
     try {
-        const response = await fetchWithCors(`${MINDICADOR_API}/ipsa`);
+        const range = days <= 7 ? '7d' : days <= 30 ? '1mo' : '3mo';
+        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${IPSA_SYMBOL}?interval=1d&range=${range}`;
+        const proxyUrl = YAHOO_FINANCE_PROXY + encodeURIComponent(url);
+
+        const response = await fetch(proxyUrl);
         const data = await response.json();
-        if (data.serie && data.serie.length > 0) {
-            return data.serie.slice(0, days).reverse();
+
+        if (data.chart && data.chart.result && data.chart.result[0]) {
+            const result = data.chart.result[0];
+            const timestamps = result.timestamp || [];
+            const closes = result.indicators.quote[0].close || [];
+
+            const history = [];
+            for (let i = 0; i < timestamps.length && i < days; i++) {
+                if (closes[i] !== null) {
+                    history.push({
+                        fecha: new Date(timestamps[i] * 1000).toISOString(),
+                        valor: closes[i]
+                    });
+                }
+            }
+
+            if (history.length > 0) {
+                return history;
+            }
         }
         throw new Error('No historical data');
     } catch (error) {
@@ -96,16 +156,13 @@ async function fetchIpsaHistory(days = 30) {
 function generateSimulatedHistory(currentValue, days) {
     const data = [];
     const now = new Date();
-    const volatility = 0.008; // 0.8% daily volatility
-
-    let value = currentValue;
 
     for (let i = days - 1; i >= 0; i--) {
         const date = new Date(now);
         date.setDate(date.getDate() - i);
 
-        // Add some realistic random variation
-        const change = (Math.random() - 0.5) * 2 * volatility * value;
+        // Add some realistic random variation (±3%)
+        let value;
         if (i !== 0) {
             value = currentValue + (Math.random() - 0.5) * currentValue * 0.03;
         } else {
@@ -117,9 +174,6 @@ function generateSimulatedHistory(currentValue, days) {
             valor: value
         });
     }
-
-    // Ensure last value is the current value
-    data[data.length - 1].valor = currentValue;
 
     return data;
 }
@@ -290,27 +344,25 @@ async function refreshData() {
     document.querySelectorAll('.card-value').forEach(el => el.classList.add('updating'));
 
     try {
-        // Fetch main data first (this usually works)
-        const mindicadorData = await fetchMindicadorData();
+        // Fetch all data in parallel
+        const [ipsaData, usdRate, ufRate, ipsaHistory] = await Promise.all([
+            fetchIPSA(),
+            fetchDolar(),
+            fetchUF(),
+            fetchIpsaHistory(currentPeriod)
+        ]);
 
-        // Extract rates
-        const usdRate = mindicadorData.dolar.valor;
-        const ufRate = mindicadorData.uf.valor;
-        const ipsaData = mindicadorData.ipsa;
-        const currentIpsa = ipsaData.valor;
+        const currentIpsa = ipsaData.current;
+        const previousIpsa = ipsaData.previous;
 
-        // Try to get historical data
-        let ipsaHistory = await fetchIpsaHistory(currentPeriod);
+        // Use real history or generate simulated
+        let chartData = ipsaHistory;
         let isSimulated = false;
 
-        // If historical API fails, generate simulated data
-        if (!ipsaHistory) {
-            ipsaHistory = generateSimulatedHistory(currentIpsa, currentPeriod);
+        if (!chartData) {
+            chartData = generateSimulatedHistory(currentIpsa, currentPeriod);
             isSimulated = true;
         }
-
-        // Get previous value for change calculation
-        const previousIpsa = ipsaHistory.length > 1 ? ipsaHistory[ipsaHistory.length - 2].valor : lastIpsaValue;
 
         // Update displays
         updateIpsaDisplay(currentIpsa, previousIpsa);
@@ -318,10 +370,10 @@ async function refreshData() {
         updateTimestamp();
 
         // Update chart
-        historicalData = ipsaHistory;
+        historicalData = chartData;
         updateChart(historicalData, isSimulated);
 
-        // Store last value for next comparison
+        // Store last value
         lastIpsaValue = currentIpsa;
 
         if (isSimulated) {
