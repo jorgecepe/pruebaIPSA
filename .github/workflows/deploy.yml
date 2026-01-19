@@ -3,7 +3,6 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches:
-      - claude/ipsa-tracker-app-iLpg3
       - main
 
 permissions:
